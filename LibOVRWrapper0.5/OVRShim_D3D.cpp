@@ -251,6 +251,13 @@ void PresentD3D11(ovrSession1_3 session, const ovrPosef renderPose[2], const ovr
 
 	layers[0] = &ld.Header;
 	ovr_SubmitFrame1_3(session, globalFrameIndex, NULL, layers, 1);
+	// mirror window - for now just clear it to yellow to show we're doing something
+	float rgba[4] = {1,1,0,1};
+	if (cfg.D3D11.pDeviceContext && cfg.D3D11.pBackBufferRT && cfg.D3D11.pSwapChain)
+	{
+		cfg.D3D11.pDeviceContext->ClearRenderTargetView(cfg.D3D11.pBackBufferRT, rgba);
+		cfg.D3D11.pSwapChain->Present(0, 0);
+	}
 }
 
 void ShutdownD3D11() {

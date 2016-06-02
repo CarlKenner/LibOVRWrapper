@@ -19,6 +19,8 @@ struct ovrHmdStruct {
 #include "shimhelper.h"
 #include "OVRShim.h"
 
+ovrHmdDesc1_3 desc;
+
 ovrLogCallback oldLogCallback;
 void logcallback(uintptr_t userData, int level, const char* message) {
 	oldLogCallback(level, message);
@@ -136,7 +138,7 @@ OVR_PUBLIC_FUNCTION(ovrHmd) ovrHmd_Create(int index) {
 
 	globalGraphicsLuid = pLuid;
 
-	ovrHmdDesc1_3 desc = ovr_GetHmdDesc1_3(pSession);
+	desc = ovr_GetHmdDesc1_3(pSession);
 
 	ovrHmdDesc* d = (ovrHmdDesc*)malloc(sizeof(ovrHmdDesc));
 
@@ -206,7 +208,7 @@ OVR_PUBLIC_FUNCTION(void) ovrHmd_Destroy(ovrHmd hmd) {
 OVR_PUBLIC_FUNCTION(unsigned int) ovrHmd_GetEnabledCaps(ovrHmd hmd) {
 	BOOST_LOG_TRIVIAL(trace) << "ovrHmd_GetEnabledCaps";
 
-	ovrHmdDesc1_3 desc = ovr_GetHmdDesc1_3((ovrSession1_3)hmd->Handle);
+	desc = ovr_GetHmdDesc1_3((ovrSession1_3)hmd->Handle);
 
 	//not possible anymore
 	return desc.DefaultHmdCaps | ovrHmdCap_Present | ovrHmdCap_Available | ovrHmdCap_Captured | ovrHmdCap_LowPersistence | ovrHmdCap_DynamicPrediction;
@@ -214,14 +216,14 @@ OVR_PUBLIC_FUNCTION(unsigned int) ovrHmd_GetEnabledCaps(ovrHmd hmd) {
 
 OVR_PUBLIC_FUNCTION(void) ovrHmd_SetEnabledCaps(ovrHmd hmd, unsigned int hmdCaps) {
 	BOOST_LOG_TRIVIAL(trace) << "ovrHmd_SetEnabledCaps";
-	globalDisableMirror = hmdCaps & ovrHmdCap_NoMirrorToWindow;
+	globalDisableMirror = (hmdCaps & ovrHmdCap_NoMirrorToWindow) != 0;
 }
 
 OVR_PUBLIC_FUNCTION(ovrBool) ovrHmd_ConfigureTracking(ovrHmd hmd, unsigned int requestedTrackingCaps,
 	unsigned int requiredTrackingCaps) {
 	BOOST_LOG_TRIVIAL(trace) << "ovrHmd_ConfigureTracking";
 	//not used anymore
-	return ovrSuccess1_3;
+	return ovrTrue;
 }
 
 OVR_PUBLIC_FUNCTION(void) ovrHmd_RecenterPose(ovrHmd hmd) {
@@ -450,20 +452,33 @@ OVR_PUBLIC_FUNCTION(void) ovrHmd_GetRenderScaleAndOffset(ovrFovPort fov, ovrSize
 }
 
 
-/// It is generally expected that the following holds:
+/// Oculus 0.5 SDK says: It is generally expected that the following holds:
 /// ThisFrameSeconds < TimewarpPointSeconds < NextFrameSeconds < 
 /// EyeScanoutSeconds[EyeOrder[0]] <= ScanoutMidpointSeconds <= EyeScanoutSeconds[EyeOrder[1]].
+/// But my own testing shows:
+/// TimewarpPointSeconds = 0, Pad = 0
+/// ThisFrameSeconds + DeltaSeconds = NextFrameSeconds < ScanoutMidpointSeconds < EyeScanoutSeconds[EyeOrder[0]] < EyeScanoutSeconds[EyeOrder[1]]
 OVR_PUBLIC_FUNCTION(ovrFrameTiming) ovrHmd_GetFrameTiming(ovrHmd hmd, unsigned int frameIndex) {
 	BOOST_LOG_TRIVIAL(trace) << "ovrHmd_GetFrameTiming index " << frameIndex;
 
 	ovrFrameTiming timing;
+	timing.DeltaSeconds = 1.0f / desc.DisplayRefreshRate;
+	timing.Pad = 0;
 	timing.ScanoutMidpointSeconds = ovr_GetPredictedDisplayTime1_3((ovrSession1_3)hmd->Handle, frameIndex);
-	timing.ThisFrameSeconds = timing.ScanoutMidpointSeconds;
-	timing.DeltaSeconds = 1.0f / globalRefreshRate; //todo: calculate this somehow?
-	timing.NextFrameSeconds = timing.ThisFrameSeconds + timing.DeltaSeconds;
-	timing.EyeScanoutSeconds[0] = timing.ThisFrameSeconds;
-	timing.EyeScanoutSeconds[1] = timing.ThisFrameSeconds;
-	timing.TimewarpPointSeconds = timing.ThisFrameSeconds;
+	if (desc.Type <= ovrHmd1_3_DK2)
+	{
+		timing.NextFrameSeconds =     timing.ScanoutMidpointSeconds - 0.00786667; // actual values returned by 0.5 SDK
+		timing.EyeScanoutSeconds[1] = timing.ScanoutMidpointSeconds + 0.00333333; // actual values returned by 0.5 SDK
+		timing.EyeScanoutSeconds[0] = timing.ScanoutMidpointSeconds + 0.01000000; // actual values returned by 0.5 SDK
+	}
+	else
+	{
+		timing.NextFrameSeconds = timing.ScanoutMidpointSeconds - 0.00786667;
+		timing.EyeScanoutSeconds[1] = timing.ScanoutMidpointSeconds + 0.0; // CV1 has global update
+		timing.EyeScanoutSeconds[0] = timing.ScanoutMidpointSeconds + 0.0; // CV1 has global update
+	}
+	timing.ThisFrameSeconds = timing.NextFrameSeconds - timing.DeltaSeconds;
+	timing.TimewarpPointSeconds = 0.0; // This is actually what SDK 0.5 returns on my old computer!
 	
 	return timing;
 }
@@ -535,21 +550,25 @@ OVR_PUBLIC_FUNCTION(ovrBool) ovrHmd_GetMeasuredLatencyTest2(ovrHmd hmd)
 	return ovrFalse;
 }
 
+bool hsw = true;
+
 OVR_PUBLIC_FUNCTION(void) ovrHmd_GetHSWDisplayState(ovrHmd hmd, ovrHSWDisplayState *hasWarningState)
 {
 	BOOST_LOG_TRIVIAL(trace) << "ovrHmd_GetHSWDisplayState";
 
 	if (hasWarningState) {
-		hasWarningState->Displayed = false;
-		hasWarningState->DismissibleTime = initTime;
-		hasWarningState->StartTime = initTime;		
+		// returns zero for everything except Pad on my old computer
+		ZeroMemory(hasWarningState, sizeof(*hasWarningState));
+		//hasWarningState->Displayed = hsw;
+		//hasWarningState->DismissibleTime = initTime + 6;
+		//hasWarningState->StartTime = initTime;		
 	}
 }
 
 OVR_PUBLIC_FUNCTION(ovrBool) ovrHmd_DismissHSWDisplay(ovrHmd hmd)
 {
 	BOOST_LOG_TRIVIAL(trace) << "ovrHmd_DismissHSWDisplay";
-
+	hsw = false;
 	return ovrTrue;
 }
 
