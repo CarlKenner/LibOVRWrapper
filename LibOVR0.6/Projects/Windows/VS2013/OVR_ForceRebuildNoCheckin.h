@@ -1,1 +1,0 @@
-static const char* OVR_FORCE_REBUILD_PRE = __TIMESTAMP__; /* DO NOT SOURCE CONTROL THIS FILE */ 
